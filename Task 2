@@ -1,0 +1,104 @@
+import os
+import numpy as np
+import tensorflow as tf
+from tensorflow.keras.preprocessing.image import ImageDataGenerator
+from tensorflow.keras.applications import MobileNetV2
+from tensorflow.keras.models import Model
+from tensorflow.keras.layers import Dense, GlobalAveragePooling2D
+from tensorflow.keras.callbacks import ModelCheckpoint, EarlyStopping
+import matplotlib.pyplot as plt
+import seaborn as sns
+from sklearn.metrics import confusion_matrix
+
+# Paths
+data_dir = 'path/to/your/dataset'  # Update with your dataset path
+img_height, img_width = 224, 224
+batch_size = 32
+num_classes = 101  # Adjust according to your dataset
+
+# Data augmentation and normalization for training
+train_datagen = ImageDataGenerator(
+    rescale=1./255,
+    rotation_range=40,
+    width_shift_range=0.2,
+    height_shift_range=0.2,
+    shear_range=0.2,
+    zoom_range=0.2,
+    horizontal_flip=True,
+    fill_mode='nearest',
+    validation_split=0.1
+)
+
+# Normalization for validation and testing
+test_datagen = ImageDataGenerator(rescale=1./255, validation_split=0.1)
+
+# Data Generators
+train_generator = train_datagen.flow_from_directory(
+    data_dir,
+    target_size=(img_height, img_width),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='training'
+)
+
+validation_generator = test_datagen.flow_from_directory(
+    data_dir,
+    target_size=(img_height, img_width),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='validation'
+)
+
+# Load the MobileNetV2 model, exclude the top layers
+base_model = MobileNetV2(input_shape=(img_height, img_width, 3), include_top=False, weights='imagenet')
+base_model.trainable = False
+
+# Add custom top layers
+x = base_model.output
+x = GlobalAveragePooling2D()(x)
+x = Dense(1024, activation='relu')(x)
+predictions = Dense(num_classes, activation='softmax')(x)
+
+# Define the model
+model = Model(inputs=base_model.input, outputs=predictions)
+model.compile(optimizer='adam', loss='categorical_crossentropy', metrics=['accuracy'])
+
+# Callbacks
+checkpoint = ModelCheckpoint('best_model.h5', monitor='val_accuracy', save_best_only=True, mode='max')
+early_stopping = EarlyStopping(monitor='val_accuracy', patience=10, restore_best_weights=True)
+
+# Train the model
+history = model.fit(
+    train_generator,
+    steps_per_epoch=train_generator.samples // batch_size,
+    validation_data=validation_generator,
+    validation_steps=validation_generator.samples // batch_size,
+    epochs=50,
+    callbacks=[checkpoint, early_stopping]
+)
+
+# Evaluate the model
+model.load_weights('best_model.h5')
+test_generator = test_datagen.flow_from_directory(
+    data_dir,
+    target_size=(img_height, img_width),
+    batch_size=batch_size,
+    class_mode='categorical',
+    subset='validation'
+)
+
+results = model.evaluate(test_generator)
+print(f"Test Loss: {results[0]}, Test Accuracy: {results[1]}")
+
+# Predictions and confusion matrix
+predictions = model.predict(test_generator)
+y_pred = np.argmax(predictions, axis=1)
+y_true = test_generator.classes
+class_names = list(test_generator.class_indices.keys())
+
+cm = confusion_matrix(y_true, y_pred)
+plt.figure(figsize=(10, 8))
+sns.heatmap(cm, annot=True, fmt='d', cmap='Blues', xticklabels=class_names, yticklabels=class_names)
+plt.xlabel('Predicted')
+plt.ylabel('True')
+plt.show()
