@@ -1,0 +1,71 @@
+import nltk
+from nltk.corpus import twitter_samples
+import re
+import string
+from nltk.corpus import stopwords
+from nltk.tokenize import TweetTokenizer
+from sklearn.feature_extraction.text import TfidfVectorizer
+from sklearn.model_selection import train_test_split
+from sklearn.naive_bayes import MultinomialNB
+from sklearn.metrics import accuracy_score, precision_score, recall_score, f1_score, classification_report
+from flask import Flask, request, jsonify
+
+# Data Collection
+nltk.download('twitter_samples')
+nltk.download('stopwords')
+
+positive_tweets = twitter_samples.strings('positive_tweets.json')
+negative_tweets = twitter_samples.strings('negative_tweets.json')
+neutral_tweets = twitter_samples.strings('tweets.20150430-223406.json')
+
+# Text Preprocessing
+stop_words = set(stopwords.words('english'))
+
+def preprocess_tweet(tweet):
+    tokenizer = TweetTokenizer(preserve_case=False, strip_handles=True, reduce_len=True)
+    tweet_tokens = tokenizer.tokenize(tweet)
+    tweet_clean = [word for word in tweet_tokens if (word not in stop_words and word not in string.punctuation)]
+    return " ".join(tweet_clean)
+
+positive_tweets_clean = [preprocess_tweet(tweet) for tweet in positive_tweets]
+negative_tweets_clean = [preprocess_tweet(tweet) for tweet in negative_tweets]
+neutral_tweets_clean = [preprocess_tweet(tweet) for tweet in neutral_tweets]
+
+# Feature Extraction
+vectorizer = TfidfVectorizer(max_df=0.9, min_df=2, ngram_range=(1, 2))
+
+tweets = positive_tweets_clean + negative_tweets_clean + neutral_tweets_clean
+labels = [1] * len(positive_tweets_clean) + [0] * len(negative_tweets_clean) + [2] * len(neutral_tweets_clean)
+
+X = vectorizer.fit_transform(tweets)
+y = labels
+
+# Model Selection and Training
+X_train, X_test, y_train, y_test = train_test_split(X, y, test_size=0.2, random_state=42)
+model = MultinomialNB()
+model.fit(X_train, y_train)
+
+# Model Evaluation
+y_pred = model.predict(X_test)
+
+print(f'Accuracy: {accuracy_score(y_test, y_pred):.2f}')
+print(f'Precision: {precision_score(y_test, y_pred, average="weighted"):.2f}')
+print(f'Recall: {recall_score(y_test, y_pred, average="weighted"):.2f}')
+print(f'F1-score: {f1_score(y_test, y_pred, average="weighted"):.2f}')
+print(classification_report(y_test, y_pred))
+
+# Deployment
+app = Flask(__name__)
+
+@app.route('/predict', methods=['POST'])
+def predict():
+    data = request.json
+    tweet = data['tweet']
+    tweet_clean = preprocess_tweet(tweet)
+    tweet_vectorized = vectorizer.transform([tweet_clean])
+    prediction = model.predict(tweet_vectorized)
+    sentiment = 'positive' if prediction == 1 else 'negative' if prediction == 0 else 'neutral'
+    return jsonify({'sentiment': sentiment})
+
+if __name__ == '__main__':
+    app.run(debug=True)
